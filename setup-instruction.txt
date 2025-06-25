@@ -1,0 +1,3 @@
+# Linux
+chmod +x setup.bash
+sudo ./setup.bash
