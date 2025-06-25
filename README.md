@@ -1,1 +1,1 @@
-# ac-bash-installer
+# AC Bash installer
