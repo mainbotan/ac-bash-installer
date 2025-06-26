@@ -11,7 +11,7 @@ This script automates the installation of **AltCor** on Ubuntu 22.04+ with:
 
 1. **Download** the installation files:
    ```bash
-   git clone https://github.com/mainbotan/ac-bash-installer.git
+   git clone https://github.com/mainbotan/ac-bash-installer.git && cd ac-bash-installer
 
 2. **Make the script executable** and run:
     ```bash
