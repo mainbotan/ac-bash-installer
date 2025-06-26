@@ -11,6 +11,22 @@ TEMP_DIR="/tmp/altcor_install"
 LOG_FILE="/var/log/altcor_install.log"
 SOURCE_DIR=$(dirname "$(realpath "$0")")/src
 
+# --- Инициализация ---
+
+# Сохраняем текущую конфигурацию apt
+APT_CONFIG_BACKUP=$(mktemp)
+grep -v '^APT::Get::' /etc/apt/apt.conf.d/* > "$APT_CONFIG_BACKUP" 2>/dev/null || true
+
+# Устанавливаем тихий режим для apt
+echo 'APT::Get::Assume-Yes "true";
+APT::Get::HideAutoRemove "true";
+APT::Get::Show-Upgraded "false";
+APT::Get::Silent "true";
+APT::Get::quiet "true";
+Dpkg::Progress-Fancy "0";
+Acquire::http::No-Cache "true";
+Acquire::Languages "none";' > /etc/apt/apt.conf.d/99altcor-install
+
 # --- Переменные ---
 generated_password=$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c12)
 
@@ -26,6 +42,15 @@ function error_exit {
     exit 1
 }
 
+function cleanup {
+    # Восстановление конфигурации apt при выходе
+    if [ -f "$APT_CONFIG_BACKUP" ]; then
+        cat "$APT_CONFIG_BACKUP" > /etc/apt/apt.conf.d/99altcor-install
+        rm -f "$APT_CONFIG_BACKUP"
+    fi
+}
+trap cleanup EXIT
+
 function install_dependencies {
     log "Установка зависимостей..."
     
@@ -33,29 +58,36 @@ function install_dependencies {
     export DEBIAN_FRONTEND=noninteractive
     
     # Обновление пакетов (с таймаутом)
-    timeout 5m sudo apt-get update -yq || {
-        log "Ошибка: apt-get update занял слишком много времени. Продолжаем..."
+    timeout 5m sudo apt-get update -yq 2>&1 | tee -a "$LOG_FILE" || {
+        log "Предупреждение: apt-get update занял слишком много времени. Продолжаем..."
     }
     
-    # Основные пакеты (без LibreOffice для теста)
+    # Основные пакеты
     local base_packages=(
         nginx
         mariadb-server
         redis-server
         software-properties-common
+        libnss3-tools
+        libfontconfig1
+        libxrender1
+        libxext6
+        libx11-6
     )
     
     # Установка с повторением при ошибке
     for attempt in {1..3}; do
-        sudo apt-get install -yq "${base_packages[@]}" && break
+        if sudo apt-get install -yq "${base_packages[@]}" 2>&1 | tee -a "$LOG_FILE"; then
+            break
+        fi
         log "Попытка $attempt не удалась. Повторяем через 5 сек..."
         sleep 5
     done
     
     # Добавляем PPA только если не было ошибок
     if [ $? -eq 0 ]; then
-        sudo add-apt-repository -y ppa:ondrej/php
-        sudo apt-get update -yq
+        sudo add-apt-repository -y ppa:ondrej/php >/dev/null 2>&1
+        sudo apt-get update -yq 2>&1 | tee -a "$LOG_FILE"
     else
         error_exit "Не удалось установить базовые пакеты."
     fi
@@ -70,9 +102,10 @@ function install_dependencies {
         php8.2-xml
         php8.2-zip 
         php8.2-gd
+        php8.2-intl
     )
     
-    sudo apt-get install -yq "${php_packages[@]}" || {
+    sudo apt-get install -yq "${php_packages[@]}" 2>&1 | tee -a "$LOG_FILE" || {
         error_exit "Ошибка установки PHP."
     }
 }
@@ -233,8 +266,11 @@ umask 022
 mkdir -p "$TEMP_DIR"
 touch "$LOG_FILE"
 
+# Красивое оформление
+whiptail --title "Установка $APP_NAME" --msgbox "Добро пожаловать в установку $APP_NAME $APP_VERSION\n\nЭтот мастер установит все необходимые компоненты." 12 60
+
 INSTALL_DIR=$(whiptail --title "Выбор папки установки" \
-                      --inputbox "Укажите папку для установки AltCor:" \
+                      --inputbox "Укажите папку для установки $APP_NAME:" \
                       10 60 "$DEFAULT_INSTALL_DIR" \
                       3>&1 1>&2 2>&3) || error_exit "Установка отменена"
 
@@ -245,17 +281,17 @@ whiptail --title "Подтверждение установки" \
          15 60 || error_exit "Установка отменена"
 
 {
-    echo 10; install_dependencies
-    echo 20; configure_libreoffice
-    echo 30; stop_services
-    echo 40; install_components "$INSTALL_DIR"
-    echo 60; configure_nginx "$INSTALL_DIR"
-    echo 70; configure_mariadb
-    echo 80; setup_services
-    echo 90; create_db_config "$INSTALL_DIR"
+    echo 10; install_dependencies >/dev/null 2>&1
+    echo 20; configure_libreoffice >/dev/null 2>&1
+    echo 30; stop_services >/dev/null 2>&1
+    echo 40; install_components "$INSTALL_DIR" >/dev/null 2>&1
+    echo 60; configure_nginx "$INSTALL_DIR" >/dev/null 2>&1
+    echo 70; configure_mariadb >/dev/null 2>&1
+    echo 80; setup_services >/dev/null 2>&1
+    echo 90; create_db_config "$INSTALL_DIR" >/dev/null 2>&1
     echo 100
-} | whiptail --gauge "Идет установка AltCor..." 6 60 0
+} | whiptail --gauge "Идет установка $APP_NAME..." 6 60 0
 
 whiptail --title "Установка завершена" \
-         --msgbox "AltCor успешно установлен!\n\nДоступен по адресу: http://localhost\n\nДанные MySQL:\n- Логин root: $generated_password\n- Логин altcor: $generated_password\n\nLibreOffice работает в headless режиме" \
+         --msgbox "$APP_NAME успешно установлен!\n\nДоступен по адресу: http://localhost\n\nДанные MySQL:\n- Логин root: $generated_password\n- Логин altcor: $generated_password\n\nLibreOffice работает в headless режиме\n\nПодробности в логе: $LOG_FILE" \
          16 60
